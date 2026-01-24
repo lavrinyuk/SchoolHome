@@ -1,0 +1,326 @@
+esphome:
+  name: main-hub
+  friendly_name: main-hub
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Логгер по WiFi
+logger:
+  baud_rate: 0
+
+api:
+  encryption:
+    key: !secret api_home
+  services:
+    - service: send_sms
+      variables:
+        recipient: string
+        message: string
+      then:
+        - sim800l.send_sms:
+            recipient: !lambda 'return recipient;'
+            message: !lambda 'return message;'
+    - service: dial
+      variables:
+        recipient: string
+      then:
+        - sim800l.dial:
+            recipient: !lambda 'return recipient;'
+
+text_sensor:
+  - platform: template
+    id: sms_sender
+    name: "Отправитель SMS"
+    icon: "mdi:account-box"
+  - platform: template
+    id: sms_message
+    name: "Текст SMS"
+    icon: "mdi:message-text"
+
+ota:
+  - platform: esphome
+    password: !secret ota_home
+
+wifi:
+  networks:
+  - ssid: !secret wifi_ssid_local
+    password: !secret wifi_password_local
+  - ssid: !secret wifi_ssid_home
+    password: !secret wifi_password_home
+  - ssid: !secret wifi_ssid_school
+    password: !secret wifi_password_school
+
+  ap:
+    ssid: "Main-Hub Fallback Hotspot"
+    password: !secret ap_password_home
+
+captive_portal:
+
+globals:
+  - id: security_mode
+    type: bool
+    restore_value: yes
+    initial_value: "false"
+
+uart:
+ - id: zvuk_uart
+   baud_rate: 9600
+   tx_pin: GPIO1
+   rx_pin: GPIO3
+
+ - id: sim_uart
+   baud_rate: 115200
+   tx_pin: GPIO17
+   rx_pin: GPIO16
+
+dfplayer:
+  - uart_id: zvuk_uart
+
+sim800l:
+  - uart_id: sim_uart
+    on_sms_received:
+    - logger.log:
+        format: "Received '%s' from %s"
+        args: [ 'message.c_str()', 'sender.c_str()' ]
+    - lambda: |-
+        id(sms_sender).publish_state(sender);
+        id(sms_message).publish_state(message);
+    # SMS управление
+    - lambda: |-
+        // "Включи свет в кухне"
+        if ((id(sms_sender).state == "+79780439780") && (id(sms_message).state == "0412043A043B044E0447043800200441043204350442002004320020043A04430445043D0435")) {
+          id(relay_light1).turn_on();
+        } 
+        // "Включи свет гостиной"
+        else if ((id(sms_sender).state == "+79780439780") && (id(sms_message).state == "0412043A043B044E044704380020044104320435044200200433043E044104420438043E0439")) {
+          id(relay_light4).turn_on();
+        }
+        // "Включи свет в кабинете"
+        else if ((id(sms_sender).state == "+79780439780") && (id(sms_message).state == "0412043A043B044E0447043800200441043204350442002004320020043A043004310438043D043504420435")) {
+          id(relay_light3).turn_on();
+        }
+        // "Включи свет в коридоре"
+        else if ((id(sms_sender).state == "+79780439780") && (id(sms_message).state == "0412043A043B044E0447043800200441043204350442002004320020043A043E04400438043E04400435")) {
+          id(relay_light2).turn_on();
+        }
+        // "Включи вентилятор"
+        else if ((id(sms_sender).state == "+79780439780") && (id(sms_message).state == "0412043A043B044E04470438002004320435043D0442043B044F0442043E0440")) {
+          id(relay_fan).turn_on();
+        }
+        // "Включи свет во всем доме"
+        else if ((id(sms_sender).state == "+79780439780") && (id(sms_message).state == "0412043A043B044E044704380020044104320435044200200432043E0020043204410435043C00200434043E043C0435")) {
+          id(relay_light1).turn_on();
+          id(relay_light2).turn_on();
+          id(relay_light3).turn_on();
+          id(relay_light4).turn_on();
+        }          
+
+# Реле
+output:
+  - platform: gpio
+    pin: GPIO13
+    id: gpio_fan
+
+  - platform: gpio
+    pin: GPIO26
+    inverted: true
+    id: gpio_light1
+
+  - platform: gpio
+    pin: GPIO27
+    inverted: true
+    id: gpio_light2
+
+  - platform: gpio
+    pin: GPIO14
+    inverted: true
+    id: gpio_light3
+
+  - platform: gpio
+    pin: GPIO12
+    inverted: true
+    id: gpio_light4
+
+# Освещение
+light:
+  - platform: binary
+    name: "Кухня"
+    output: gpio_light1
+    id: relay_light1
+
+  - platform: binary
+    name: "Прихожая "
+    output: gpio_light2
+    id: relay_light2
+
+  - platform: binary
+    name: "Кабинет"
+    output: gpio_light3
+    id: relay_light3
+
+  - platform: binary
+    name: "Гостиная"
+    output: gpio_light4
+    id: relay_light4
+
+# Вентиляция
+fan:
+  - platform: binary
+    name: "Вентиляция"
+    output: gpio_fan
+    id: relay_fan
+
+
+# RFID модуль
+spi:
+  clk_pin: GPIO18
+  miso_pin: GPIO19
+  mosi_pin: GPIO23
+  id: "RFID"
+
+rc522_spi:
+  cs_pin: GPIO5
+  spi_id: RFID
+  id: my_rc522
+  update_interval: 1s
+  on_tag:
+    then:
+      - lambda: |-
+          if (id(security_mode)) {
+            id(security_mode) = false;
+            ESP_LOGI("RFID", "Дом снят c охраны.");
+          } else {
+            id(security_mode) = true;
+            ESP_LOGI("RFID", "Дом поставлен на охрану.");
+          }
+      - if:
+          condition:
+            lambda: 'return id(security_mode);'
+          then:
+            - dfplayer.play_mp3: 7  
+          else:
+            - dfplayer.play_mp3: 8 
+
+# Датчики
+binary_sensor:
+  - platform: gpio
+    pin: 
+      number: GPIO4
+      mode: INPUT_PULLUP
+    name: "Входная дверь"
+    id: door_sensor
+    device_class: door
+    on_press: 
+      then:
+        - dfplayer.play_mp3: 1        
+        - if:
+            condition:
+              lambda: |-
+                return id(security_mode);
+            then:
+              - dfplayer.play_mp3: 9
+              - sim800l.send_sms:
+                  recipient: '+79780439780'
+                  message: Vnimanie! Obnaruzhen postoronniy!
+              - lambda: |-
+                  ESP_LOGI("Датчик двери", "Дверь открыта! Тревога!");
+    on_release: 
+      then:
+        - dfplayer.play_mp3: 2
+
+  - platform: gpio
+    pin: 
+      number: GPIO15
+      mode: INPUT_PULLUP
+    name: "Окно"
+    id: window_sensor
+    device_class: window 
+    on_press:
+      then:
+        - dfplayer.play_mp3: 3
+        - if:
+            condition:
+              lambda: |-
+                return id(security_mode);
+            then:
+              - sim800l.send_sms:
+                  recipient: '+79780439780'
+                  message: Vnimanie! Obnaruzhen postoronniy!
+              - dfplayer.play_mp3: 9
+              - lambda: |-
+                  ESP_LOGI("Датчик окна", "Окно открыто! Тревога!");
+    on_release:
+      then:
+         - dfplayer.play_mp3: 4
+
+  - platform: gpio
+    pin: GPIO25 
+    name: "Датчик движения"
+    id: motion_sensor
+    device_class: motion
+    on_press:
+      then:
+      - if:
+          condition:
+            lambda: |-
+              return id(security_mode);
+          then:
+            - sim800l.send_sms:
+                  recipient: '+79780439780'
+                  message: Vnimanie! Obnaruzhen postoronniy!
+            - dfplayer.play_mp3: 9
+            - lambda: |-
+                ESP_LOGI("Датчик движения", "Замечено движение! Тревога!");
+
+  # Датчик газа
+  - platform: gpio
+    pin: GPIO32
+    name: "Датчик газа"
+    id: gas_sensor
+    device_class: gas
+    filters:
+      - invert
+      - delayed_on: 5s
+      - delayed_off: 5s
+    on_press:
+      then:
+        - sim800l.send_sms:
+            recipient: '+79780439780'
+            message: Vnimanie! Obnaruzhena utechka gaza!
+        - dfplayer.play:
+            file: 10
+            loop: true
+        - fan.turn_on: relay_fan
+        - light.turn_off: relay_light1
+        - light.turn_off: relay_light2
+        - light.turn_off: relay_light3
+        - light.turn_off: relay_light4
+    on_release: 
+      then:
+        - fan.turn_off: relay_fan
+        - dfplayer.play_mp3: 11
+
+sensor:
+  - platform: dht
+    pin: GPIO33
+    temperature:
+      name: "Температура"
+      on_value_range:
+        - above: 29.0
+          then:
+          - fan.turn_on: relay_fan
+          - dfplayer.play_mp3: 5
+        - below: 28.9
+          then:
+          - dfplayer.play_mp3: 6
+          - fan.turn_off: relay_fan
+    humidity:
+      name: "Влажность"
+    update_interval: 3s
+
+  - platform: sim800l
+    rssi:
+      name: "Уровень сигнала GSM"

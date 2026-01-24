@@ -1,0 +1,79 @@
+esphome:
+  name: camera-hub
+  friendly_name: camera-hub
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+psram:
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_camera
+
+ota:
+  - platform: esphome
+    password: !secret ota_camera
+
+wifi:
+  networks:
+  - ssid: !secret wifi_ssid_local
+    password: !secret wifi_password_local
+  - ssid: !secret wifi_ssid_home
+    password: !secret wifi_password_home
+  - ssid: !secret wifi_ssid_school
+    password: !secret wifi_password_school
+  ap:
+    ssid: "Camera-Hub Fallback Hotspot"
+    password: !secret ap_password_camera
+
+captive_portal:
+
+# Настройка Камеры
+esp32_camera:
+  external_clock:
+    pin: GPIO0
+    frequency: 20MHz
+  i2c_pins:
+    sda: GPIO26
+    scl: GPIO27
+  data_pins: 
+    - GPIO5
+    - GPIO18
+    - GPIO19
+    - GPIO21
+    - GPIO36
+    - GPIO39
+    - GPIO34
+    - GPIO35
+  vsync_pin: GPIO25
+  href_pin: GPIO23
+  pixel_clock_pin: GPIO22
+  power_down_pin: GPIO32
+  max_framerate: 25 fps
+  resolution: 800x600
+  name: "Камера наблюдения"
+  icon: "mdi:cctv"
+
+# Вспышка
+output:
+  - platform: ledc
+    pin: GPIO4
+    id: gpio_4
+    channel: 2
+
+light:
+  - platform: binary
+    output: gpio_4
+    name: "Вспышка камеры"
+    id: camera_light
+    icon: "mdi:flashlight-off"
+
+sensor:
+  - platform: wifi_signal
+    name: "Уровень WiFi сигнала камеры"
+    update_interval: 60s
